@@ -1,0 +1,103 @@
+import tensorflow as tf
+from tensorflow.keras import layers, models, mixed_precision
+import cv2
+import numpy as np
+import requests
+from PIL import Image
+import numpy as np
+import cv2
+import tensorflow as tf
+from io import BytesIO
+
+mixed_precision.set_global_policy('mixed_float16')
+
+data=tf.keras.utils.image_dataset_from_directory(
+    '/kaggle/input/vehicle-detection-image-set/data',
+    labels='inferred',
+    label_mode='binary',
+    image_size=[64,64],
+    interpolation='nearest',
+    batch_size=32,
+    shuffle=True,
+)
+
+def convert_to_float(image,label):
+    image=tf.image.convert_image_dtype(image,dtype=tf.float32)
+    return image,label
+
+AUTOTUNE=tf.data.experimental.AUTOTUNE
+dasa=(data.map(convert_to_float).cache().prefetch(buffer_size=AUTOTUNE))
+
+model = models.Sequential([
+    layers.InputLayer(input_shape=(64, 64, 3)),  # Adjust input shape
+    layers.Conv2D(32, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(128, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Flatten(),  # Output shape will be (None, 4608)
+    layers.Dense(128, activation='relu'),
+    layers.Dense(1, activation='sigmoid')  # Output layer for binary classification
+])
+
+model.compile(optimizer='adam',
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
+model.fit(dasa, epochs=20)
+
+# Assuming your model is already loaded
+# model = tf.keras.models.load_model('your_model.h5')
+
+def download_and_preprocess_image(url):
+    try:
+        # Download the image
+        response = requests.get(url)
+        response.raise_for_status()
+
+        # Open the image
+        image = Image.open(BytesIO(response.content))
+
+        # Convert to RGB if it's not
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        # Resize the image to match the model input
+        image = image.resize((64, 64))  # Assuming your model expects 64x64 input
+
+        # Convert to a numpy array
+        image_array = np.array(image).astype('float32') / 255.0  # Normalize
+
+        # Add batch dimension
+        image_array = np.expand_dims(image_array, axis=0)
+
+        return image_array
+
+    except Exception as e:
+        print(f"Error processing image: {e}")
+        return None
+
+def classify_image_from_url(url, model):
+    # Preprocess the image
+    image_array = download_and_preprocess_image(url)
+
+    if image_array is None:
+        return "Failed to process the image."
+
+    # Predict using the model
+    prediction = model.predict(image_array)
+
+    # Interpret the result
+    if prediction[0] > 0.5:
+        label = 'not a vehicle'
+    else:
+        label = 'vehicle'
+
+    return f"The image is classified as: {label}"
+
+# Example usage
+image_url = "https://www.capgemini.com/wp-content/uploads/2019/05/Capgemini_research_THE-AUTONOMOUS-CAR-A-Consumer-Perspective.jpg"
+result = classify_image_from_url(image_url, model)
+print(result)
+
